@@ -11,9 +11,14 @@
             [net.cgrand.enlive-html :as html]
             [warc-clojure.core :as warc]))
 
+; Dates pertaining to our crawl period
 (def start-date (clj-time/date-time 2011 12 31))
-
 (def end-date (clj-time/date-time 2012 06 30))
+
+; We have a bunch of markup issues that I am unable
+                                        ; to resolve.
+(def *topic-links-output-file* "/bos/tmp19/spalakod/clueweb12pp/jobs/nabble/nabble-index-pages-processing/topics-links-list.txt")
+(def *error-warcs-file* "/bos/tmp19/spalakod/clueweb12pp/jobs/nabble/nabble-index-pages-processing/wrong-warcs-list.txt")
 
 (defn get-page-topic-links
   [page-resource]
@@ -22,25 +27,24 @@
    (fn
      [x]
      (and x
-          (re-find (re-matcher #"-tp" x))))
+        (re-find (re-matcher #"-tp" x))))
    (map
     (fn
       [a-tag]
       (-> a-tag
-          :attrs
-          :href))
+         :attrs
+         :href))
     (html/select page-resource [:a]))))
 
 (defn get-page-dates
   [page-resource]
   (letfn [(isolate-epoch
-           [js-string]
-           (last (re-find #"new Date\(([0-9]*)\)" js-string)))
+            [js-string]
+            (last (re-find #"new Date\(([0-9]*)\)" js-string)))
 
           (epoch-to-datetime
-           [epoch-str]
-           (try (time-coerce/from-long (. Long parseLong epoch-str))
-             (catch Exception e (do (println "FUCK UP") (throw)))))]
+            [epoch-str]
+            (time-coerce/from-long (. Long parseLong epoch-str)))]
     (map
      epoch-to-datetime
      (map
@@ -56,6 +60,10 @@
                  (html/select page-resource [:a :script]))))))))
 
 (defn handle-nabble-subforum
+  "Args:
+    page-stream : A stream to a nabble subforum index page
+   Returns:
+    list of topic links on the page"
   [page-stream]
   (let [page-resource (html/html-resource page-stream)
         links-on-page (get-page-topic-links page-resource)
@@ -74,18 +82,24 @@
 
 (defn -main
   [& args]
-  (let [[optional [nabble-jobs-dir] banner] (cli/cli args)
-        nabble-jobs-dir-handle (io/file nabble-jobs-dir)]
-    (doseq [warc-file (filter
-                        (fn [nabble-file]
-                          (and (.endsWith (.getName nabble-file) "warc.gz")
-                               (not (re-find (re-matcher
-                                              #"latest"
-                                              (.getAbsolutePath nabble-file))))))
-                        (file-seq nabble-jobs-dir-handle))]
-      (doseq [processed-records (filter (fn [record]
-                                          (not (empty? record)))
-                                        (process-nabble-warc
-                                         (.getAbsolutePath warc-file)))]
-        (doseq [record processed-records]
-          (println record))))))
+  
+  (with-open [out (io/writer *topic-links-output-file*)
+              err (io/writer *error-warcs-file*)]
+    (let [[optional [nabble-jobs-dir] banner] (cli/cli args)
+          nabble-jobs-dir-handle (io/file nabble-jobs-dir)]
+      (doseq [warc-file (filter
+                         (fn [nabble-file]
+                           (and (.endsWith (.getName nabble-file) "warc.gz")
+                              (not (re-find (re-matcher
+                                           #"latest"
+                                           (.getAbsolutePath nabble-file))))))
+                         (file-seq nabble-jobs-dir-handle))]
+        (doseq [processed-records  (try (filter (fn [record]
+                                                  (not (empty? record)))
+                                                (process-nabble-warc
+                                                 (.getAbsolutePath warc-file)))
+                                        (catch Exception e (do (.write err (.getAbsolutePath warc-file))
+                                                               (.write err "\n"))))]
+          (doseq [record processed-records]
+            (do (.write out record)
+                (.write out "\n"))))))))
