@@ -15,10 +15,11 @@
 (def start-date (clj-time/date-time 2011 12 31))
 (def end-date (clj-time/date-time 2012 06 30))
 
-; We have a bunch of markup issues that I am unable
-                                        ; to resolve.
-(def *topic-links-output-file* "/bos/tmp19/spalakod/clueweb12pp/jobs/nabble/nabble-index-pages-processing/topics-links-list.txt")
+(def *topic-links-output-file* "/bos/tmp19/spalakod/clueweb12pp/jobs/nabble/nabble-index-pages-processing/topic-links-list.txt")
 (def *error-warcs-file* "/bos/tmp19/spalakod/clueweb12pp/jobs/nabble/nabble-index-pages-processing/wrong-warcs-list.txt")
+
+(def *topic-links-handle* (io/writer *topic-links-output-file*))
+(def *error-warcs-handle* (io/writer *error-warcs-file*))
 
 (defn get-page-topic-links
   [page-resource]
@@ -37,37 +38,42 @@
     (html/select page-resource [:a]))))
 
 (defn get-page-dates
-  [page-resource]
+  [page-resource page-record]
   (letfn [(isolate-epoch
             [js-string]
             (last (re-find #"new Date\(([0-9]*)\)" js-string)))
 
           (epoch-to-datetime
             [epoch-str]
-            (time-coerce/from-long (. Long parseLong epoch-str)))]
-    (map
-     epoch-to-datetime
+            (try (time-coerce/from-long (. Long parseLong epoch-str))
+                 (catch Exception e (do (.write *error-warcs-handle* (:target-uri-str page-record))
+                                        (.write *error-warcs-handle* "\n")
+                                        nil))))]
+    (filter
+     identity
      (map
-      isolate-epoch
-      (filter
-       (fn
-         [script-content]
-         (re-find (re-matcher #"formatDateShort" script-content)))
-       (flatten (map
-                 (fn
-                   [script]
-                   (:content script))
-                 (html/select page-resource [:a :script]))))))))
+      epoch-to-datetime
+      (map
+       isolate-epoch
+       (filter
+        (fn
+          [script-content]
+          (re-find (re-matcher #"formatDateShort" script-content)))
+        (flatten (map
+                  (fn
+                    [script]
+                    (:content script))
+                  (html/select page-resource [:a :script])))))))))
 
 (defn handle-nabble-subforum
   "Args:
     page-stream : A stream to a nabble subforum index page
    Returns:
     list of topic links on the page"
-  [page-stream]
-  (let [page-resource (html/html-resource page-stream)
+  [page-record]
+  (let [page-resource (html/html-resource (:payload-stream page-record))
         links-on-page (get-page-topic-links page-resource)
-        dates-on-page (get-page-dates page-resource)]
+        dates-on-page (get-page-dates page-resource page-record)]
     (if (some
          (fn [post-date] (clj-time/within? (clj-time/interval start-date end-date) post-date))
          dates-on-page)
@@ -78,13 +84,12 @@
   "Processes one nabble warc file"
   [warc-file-name]
   (for [record (warc/get-http-records-seq (warc/get-warc-reader warc-file-name))]
-    (handle-nabble-subforum (:payload-stream record))))
+    (handle-nabble-subforum record)))
 
 (defn -main
   [& args]
   
-  (with-open [out (io/writer *topic-links-output-file*)
-              err (io/writer *error-warcs-file*)]
+  (with-open [out (io/writer *topic-links-output-file*)]
     (let [[optional [nabble-jobs-dir] banner] (cli/cli args)
           nabble-jobs-dir-handle (io/file nabble-jobs-dir)]
       (doseq [warc-file (filter
@@ -94,12 +99,10 @@
                                            #"latest"
                                            (.getAbsolutePath nabble-file))))))
                          (file-seq nabble-jobs-dir-handle))]
-        (doseq [processed-records  (try (filter (fn [record]
-                                                  (not (empty? record)))
-                                                (process-nabble-warc
-                                                 (.getAbsolutePath warc-file)))
-                                        (catch Exception e (do (.write err (.getAbsolutePath warc-file))
-                                                               (.write err "\n"))))]
+        (doseq [processed-records (filter (fn [record]
+                                            (not (empty? record)))
+                                          (process-nabble-warc
+                                           (.getAbsolutePath warc-file)))]
           (doseq [record processed-records]
             (do (.write out record)
                 (.write out "\n"))))))))

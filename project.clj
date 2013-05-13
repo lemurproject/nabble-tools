@@ -8,4 +8,5 @@
                  [org.clojure/clojure "1.4.0"]
                  [org.clojars.shriphani/warc-clojure "0.2.3-SNAPSHOT"]
                  [org.clojure/tools.cli "0.2.2"]]
-  :main nabble-tools.nabble-index-pages)
+  :main nabble-tools.nabble-index-pages
+  :aot :all)
